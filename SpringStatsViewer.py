@@ -467,7 +467,7 @@ class Application(Tix.Frame):
                 n = n + 1
                 teamno = teamno + 1
             # say who won
-            if self.demofile.exited or len(self.demofile.winningteam) == 0 or self.demofile.winningteam[0] not in self.teams:
+            if self.demofile.exited or len(self.demofile.winningteam) == 0:
                 id = canvas.create_text(10, 10 + n * offset, anchor=Tix.NW,  text='There is no winner',
                     state=Tix.DISABLED,
                     disabledfill='#EEE',

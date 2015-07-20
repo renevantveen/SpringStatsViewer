@@ -804,6 +804,12 @@ class DemoFileReader:
             else:
                 self.incomplete = False
                 # print self.filename + ': ' + str(self.numplayers) + ' players in ' + str(self.numteams) + ' teams, team #' + str(self.winningteam) + ' won.'
+        # get the length of the file so we can work around a bug/feature introduced around 2015-07-07
+        # seek to end
+        self.file.seek(0, 2)
+        self.filelength = self.file.tell()
+        # and move back to the beginning
+        self.file.seek(0, 0)
         return True
     
     def script(self):
@@ -1521,6 +1527,9 @@ class DemoFileReader:
         # get the team numbers of the winning ally teams
         self.winners()
         where = self.headersize + self.scriptsize + self.demostreamsize + self.winningteamchunksize
+        # work around a bug/feature introduced around 2015-07-07
+        if self.filelength == where + self.playerstatchunksize + self.teamstatchunksize - 1:
+            where -= 1
         self.file.seek(where,0)
         buffer = self.file.read(self.playerstatchunksize)
         if len(buffer) != self.playerstatchunksize:
@@ -1528,11 +1537,48 @@ class DemoFileReader:
             return None
         offset = 0
         self.playerstatistics = dict()
+        # around last year there was a change which causes byte ordering in the team statistics to depend on platform
+        # so we need to guess
+        
+        # try little endian first
+        bo = '<'
+        swap = False
+        for x in self.players:
+            # the statistics for spectators are immaterial, we just skip over them
+            if x[1] != -1:
+                values = struct.unpack(bo + '5i', buffer[offset:offset + self.playerstatelemsize])
+                for value in values:
+                    if value < 0:
+                        swap = True
+                        break
+            if swap:
+                break
+            offset = offset + self.playerstatelemsize
+
+        offset = 0
+        if swap:
+            bo = '>'
+            swap = False
+            for x in self.players:
+                # the statistics for spectators are immaterial, we just skip over them
+                if x[1] != -1:
+                    values = struct.unpack(bo + '5i', buffer[offset:offset + self.playerstatelemsize])
+                    for value in values:
+                        if value < 0:
+                            swap = True
+                            break
+                if swap:
+                    break
+                offset = offset + self.playerstatelemsize
+            if swap:
+                self._lasterror = 'File ' + self.filename + ', unable to guess byte order for player statistics'
+                return None
+        offset = 0
         for x in self.players:
             # the statistics for spectators are immaterial, we just skip over them
             if x[1] != -1:
                 # if a player quits (or is kicked) before the end of the game then the values are recorded as 0, 0, 0, 0, 0
-                values = struct.unpack('=5i', buffer[offset:offset + self.playerstatelemsize])
+                values = struct.unpack(bo + '5i', buffer[offset:offset + self.playerstatelemsize])
                 p = PlayerStatistics()
                 p.mousePixels = values[0]
                 p.mouseClicks = values[1]
@@ -1569,6 +1615,9 @@ class DemoFileReader:
             self._lasterror = 'File ' + self.filename + ' contains team statistics in an unknown format'
             return None
         where = self.headersize + self.scriptsize + self.demostreamsize + self.winningteamchunksize + self.playerstatchunksize 
+        # work around a bug/feature introduced around 2015-07-07
+        if self.filelength == where + self.teamstatchunksize - 1:
+            where -= 1
         self.file.seek(where,0)
         buffer = self.file.read(self.teamstatchunksize)
         if len(buffer) != self.teamstatchunksize:
@@ -1578,14 +1627,27 @@ class DemoFileReader:
         # first there is an array of self.numteams long of integers, giving the number of statistics for each team
         xsize = 0
         sizes = list()
+        # around last year there was a change which causes byte ordering in the team statistics to depend on platform
+        # so we need to guess
+        bo = '>'
+        values = struct.unpack(bo + 'i', buffer[0:struct.calcsize(bo + 'i')])
+        if values[0] > 256 or values[0] < 0:
+            bo = '<'
+            values = struct.unpack(bo + 'i', buffer[0:struct.calcsize(bo + 'i')])
+            if values[0] > 256 or values[0] < 0:
+                self._lasterror = 'File ' + self.filename + ', unable to guess byte order for team statistics'
+                return None
+        maxsize = 0
+        fmt = bo + 'i'
+        size = struct.calcsize(fmt)
         for x in self.teams:
-            fmt = '=i'
-            size = struct.calcsize(fmt)
             values = struct.unpack(fmt, buffer[offset:offset + size])
             sizes.append(values[0])
             # print x[0] + ' has ' + str(values[0]) + ' statistic records from ' + repr(buffer[offset:offset + size])
             offset = offset + size
-            xsize = xsize + size + values[0] * self.teamstatelemsize
+            if values[0] > maxsize:
+                maxsize = values[0]
+        xsize = ( self.teamstatelemsize * maxsize + size ) * len(self.teams)
         # check for consistency
         if xsize != self.teamstatchunksize:
             self._lasterror = 'Calculated (' + str(xsize) + ') and real (' + str(self.teamstatchunksize) + ') team statistic chunk size differ'
@@ -1595,7 +1657,7 @@ class DemoFileReader:
         for x in self.teams:
             teamstat = list()
             for n in xrange(0,sizes[team]):
-                values = struct.unpack('=i12f7i' , buffer[offset:offset + self.teamstatelemsize])
+                values = struct.unpack(bo + 'i12f7i' , buffer[offset:offset + self.teamstatelemsize])
                 t = TeamStatistics()
                 t.frame = values[0]
                 t.metalUsed = values[1]
@@ -1652,6 +1714,15 @@ class DemoFileReader:
             return None
         for c in buffer:
             self.winningteam.append(ord(c))
+            teamspec = 'team' + str(self.winningteam[-1])
+            found = False
+            for team in self.teams:
+                if teamspec == team[2]:
+                    found = True
+                    break
+            if not found:
+                self._lasterror = 'File ' + self.filename + ', winning team contains an invalid entry'
+                # just continue
         return len(self.winningteam)
 
     def errormessage(self):
