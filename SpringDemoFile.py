@@ -1641,6 +1641,8 @@ class DemoFileReader:
         fmt = bo + 'i'
         size = struct.calcsize(fmt)
         for x in self.teams:
+            fmt = '=i'
+            size = struct.calcsize(fmt)
             values = struct.unpack(fmt, buffer[offset:offset + size])
             sizes.append(values[0])
             # print x[0] + ' has ' + str(values[0]) + ' statistic records from ' + repr(buffer[offset:offset + size])
